@@ -64,8 +64,8 @@ st.markdown(
 # --------------------------------------------------------------
 # API 접근 범위 설정
 scope = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
-    "https://www.googleapis.com/auth/drive.readonly"
+    "https://www.googleapis.com/auth/spreadsheets",  # 읽기/쓰기 모두 가능
+    "https://www.googleapis.com/auth/drive"
 ]
 
 # [gcp_service_account] 섹션에 서비스 계정 정보가 있음
