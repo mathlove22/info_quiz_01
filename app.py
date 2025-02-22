@@ -93,7 +93,10 @@ criteria_data.sort(key=lambda x: float(x["최소비율"]), reverse=True)
 if len(questions_data) < 6:
     st.error("문제 데이터가 6문항 미만입니다.")
     st.stop()
-selected_questions = random.sample(questions_data, 6)
+
+if "selected_questions" not in st.session_state:
+    st.session_state.selected_questions = random.sample(questions_data, 6)
+selected_questions = st.session_state.selected_questions
 
 # --------------------------------------------------------------
 # 앱 UI 구성: 제목, 학생 정보 입력
