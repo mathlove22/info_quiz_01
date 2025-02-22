@@ -9,60 +9,63 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --------------------------------------------------------------
-# 커스텀 CSS 및 자바스크립트 (Ctrl+V 완전 차단)
+# 커스텀 CSS 및 자바스크립트 (Ctrl+V 완전 차단 - MutationObserver 사용)
 # --------------------------------------------------------------
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #f0f2f6;
-    }
-    .title {
-        font-family: 'Helvetica', sans-serif;
-        font-size: 2.8em;
-        color: #3366cc;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    .header {
-        font-family: 'Helvetica', sans-serif;
-        font-size: 1.75em;
-        color: #333;
-        margin-top: 20px;
-        margin-bottom: 10px;
-    }
-    .subheader {
-        font-family: 'Helvetica', sans-serif;
-        font-size: 1.25em;
-        color: #555;
-    }
-    .score-card {
-        background-color: #ffffff;
-        border-radius: 10px;
-        padding: 20px;
-        margin-top: 20px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    .criterion-item {
-        margin-bottom: 10px;
-    }
+      .main {
+          background-color: #f0f2f6;
+      }
+      .title {
+          font-family: 'Helvetica', sans-serif;
+          font-size: 2.8em;
+          color: #3366cc;
+          text-align: center;
+          margin-bottom: 20px;
+      }
+      .header {
+          font-family: 'Helvetica', sans-serif;
+          font-size: 1.75em;
+          color: #333;
+          margin-top: 20px;
+          margin-bottom: 10px;
+      }
+      .subheader {
+          font-family: 'Helvetica', sans-serif;
+          font-size: 1.25em;
+          color: #555;
+      }
+      .score-card {
+          background-color: #ffffff;
+          border-radius: 10px;
+          padding: 20px;
+          margin-top: 20px;
+          box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      }
+      .criterion-item {
+          margin-bottom: 10px;
+      }
     </style>
     <script>
-      // Ctrl+V 단축키 차단
+      // 기존 Ctrl+V 단축키 차단
       document.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
               e.preventDefault();
           }
       });
-      // 모든 textarea 요소에서 붙여넣기 이벤트를 차단
-      window.addEventListener('load', function(){
-          var textareas = document.getElementsByTagName('textarea');
-          for(var i=0; i<textareas.length; i++){
-              textareas[i].addEventListener("paste", function(e) {
-                  e.preventDefault();
-              });
-          }
+      // MutationObserver를 사용하여 새로 추가되는 모든 textarea에 붙여넣기 이벤트 차단 등록
+      const observer = new MutationObserver((mutationsList, observer) => {
+          document.querySelectorAll('textarea').forEach((ta) => {
+              if (!ta.dataset.pasteBlocked) {
+                  ta.dataset.pasteBlocked = "true";
+                  ta.addEventListener("paste", function(e) {
+                      e.preventDefault();
+                  });
+              }
+          });
       });
+      observer.observe(document.body, { childList: true, subtree: true });
     </script>
     """,
     unsafe_allow_html=True,
@@ -77,7 +80,6 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# [gcp_service_account] 섹션에 저장된 서비스 계정 정보 사용
 credentials = ServiceAccountCredentials.from_json_keyfile_dict(
     st.secrets["gcp_service_account"], scope
 )
@@ -137,7 +139,6 @@ with st.sidebar:
     student_id = st.text_input("학번", key="student_id", disabled=submitted_flag)
     student_name = st.text_input("이름", key="student_name", disabled=submitted_flag)
 
-# 제출 버튼은 학번/이름이 없거나 이미 제출된 경우 비활성화
 submit_disabled = st.session_state.submitted or not (student_id.strip() and student_name.strip())
 
 # --------------------------------------------------------------
@@ -248,7 +249,7 @@ if st.button("제출", disabled=submit_disabled):
                 """
                 st.markdown(result_card, unsafe_allow_html=True)
                 
-                # 결과 기록 (결과 기록용 시트가 설정된 경우)
+                # 결과 기록 (기록용 시트가 설정된 경우)
                 if results_sheet_id:
                     submission_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     row = [student_id, student_name, submission_time, total_score]
@@ -265,7 +266,7 @@ if st.button("제출", disabled=submit_disabled):
                 else:
                     st.warning("결과 기록용 스프레드시트 ID(results_sheet_id)가 설정되어 있지 않습니다.")
                 
-                # 제출 완료 후 재제출/수정 불가로 설정
+                # 제출 완료 후 재제출/수정 불가 처리
                 st.session_state.submitted = True
             except Exception as e:
                 st.error("채점 결과 처리 중 오류 발생: " + str(e))
