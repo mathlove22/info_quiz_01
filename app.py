@@ -77,13 +77,13 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# [gcp_service_account] 섹션에 서비스 계정 정보가 있음
+# [gcp_service_account] 섹션에 저장된 서비스 계정 정보 사용
 credentials = ServiceAccountCredentials.from_json_keyfile_dict(
     st.secrets["gcp_service_account"], scope
 )
 gc = gspread.authorize(credentials)
 
-# [general] 섹션 내부의 스프레드시트 ID 접근
+# [general] 섹션에서 스프레드시트 ID 읽기
 general_secrets = st.secrets.get("general", {})
 questions_sheet_id = general_secrets.get("questions_sheet_id")
 criteria_sheet_id = general_secrets.get("criteria_sheet_id")
@@ -93,19 +93,24 @@ if not questions_sheet_id or not criteria_sheet_id:
     st.error("문제 또는 채점 기준 스프레드시트 ID가 설정되지 않았습니다.")
     st.stop()
 
-# 문제 시트 (각 행: {"문제": ..., "모범답안": ...})
-questions_sh = gc.open_by_key(questions_sheet_id)
-questions_ws = questions_sh.get_worksheet(0)
-questions_data = questions_ws.get_all_records()
+# --- 문제 데이터와 채점 기준은 한 번만 불러오도록 세션 상태에 저장 ---
+if "questions_data" not in st.session_state:
+    questions_sh = gc.open_by_key(questions_sheet_id)
+    questions_ws = questions_sh.get_worksheet(0)
+    st.session_state.questions_data = questions_ws.get_all_records()
 
-# 채점 기준 시트 (각 행: {"최소비율": 80, "점수": 5, "설명": ...})
-criteria_sh = gc.open_by_key(criteria_sheet_id)
-criteria_ws = criteria_sh.get_worksheet(0)
-criteria_data = criteria_ws.get_all_records()
-criteria_data.sort(key=lambda x: float(x["최소비율"]), reverse=True)
+if "criteria_data" not in st.session_state:
+    criteria_sh = gc.open_by_key(criteria_sheet_id)
+    criteria_ws = criteria_sh.get_worksheet(0)
+    criteria = criteria_ws.get_all_records()
+    criteria.sort(key=lambda x: float(x["최소비율"]), reverse=True)
+    st.session_state.criteria_data = criteria
+
+questions_data = st.session_state.questions_data
+criteria_data = st.session_state.criteria_data
 
 # --------------------------------------------------------------
-# 문제 목록 표시 (랜덤으로 6문항 선택; 세션 상태 사용하여 한 번 선택 후 고정)
+# 문제 목록 표시 (랜덤으로 6문항 선택; 세션 상태 사용)
 # --------------------------------------------------------------
 if len(questions_data) < 6:
     st.error("문제 데이터가 6문항 미만입니다.")
@@ -122,21 +127,21 @@ if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
 # --------------------------------------------------------------
-# 앱 UI 구성: 제목, 학생 정보 입력 (제출 완료 시 비활성화)
+# 앱 UI 구성: 제목, 학생 정보 입력 (제출 후 수정 불가)
 # --------------------------------------------------------------
 st.markdown('<div class="title">논술형 문제 채점 시스템</div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown('<div class="header">학생 정보</div>', unsafe_allow_html=True)
-    submitted_flag = st.session_state.get("submitted", False)
+    submitted_flag = st.session_state.submitted
     student_id = st.text_input("학번", key="student_id", disabled=submitted_flag)
     student_name = st.text_input("이름", key="student_name", disabled=submitted_flag)
 
-# 제출 버튼은 학번과 이름이 없거나 이미 제출된 경우 비활성화
+# 제출 버튼은 학번/이름이 없거나 이미 제출된 경우 비활성화
 submit_disabled = st.session_state.submitted or not (student_id.strip() and student_name.strip())
 
 # --------------------------------------------------------------
-# 각 질문별 문제 및 답안 입력 영역 생성 (제출 완료 시 비활성화)
+# 각 문제별 문제 및 답안 입력 영역 생성 (제출 후 수정 불가)
 # --------------------------------------------------------------
 st.markdown('<div class="header">문제 및 답안</div>', unsafe_allow_html=True)
 answers = {}
@@ -147,10 +152,9 @@ for idx, q in enumerate(selected_questions):
     answers[idx] = ans
 
 # --------------------------------------------------------------
-# Gemini 2.0 LLM을 이용한 전체 채점 함수 (모든 문제 한 번에 평가)
+# Gemini 2.0 LLM을 이용한 전체 채점 함수 (한 번에 평가)
 # --------------------------------------------------------------
 def grade_all_answers_with_gemini(combined_prompt):
-    # GEMINI_API_KEY (gcp_service_account 섹션 내부)
     api_key = st.secrets["gcp_service_account"].get("GEMINI_API_KEY")
     if not api_key:
         st.error("GEMINI_API_KEY 환경 변수가 설정되어 있지 않습니다.")
@@ -164,7 +168,6 @@ def grade_all_answers_with_gemini(combined_prompt):
         "max_output_tokens": 8192,
         "response_mime_type": "text/plain",
     }
-
     model = genai.GenerativeModel(
         model_name="gemini-2.0-flash-exp",
         generation_config=generation_config,
@@ -187,83 +190,82 @@ def grade_all_answers_with_gemini(combined_prompt):
     return result
 
 # --------------------------------------------------------------
-# 제출 버튼 및 채점 처리, 그리고 결과 기록 (쓰기를 위한 결과 시트)
+# 제출 버튼 및 채점 처리, 결과 기록 (결과 기록용 시트 적용)
 # --------------------------------------------------------------
 if st.button("제출", disabled=submit_disabled):
     if not (student_id.strip() and student_name.strip()):
         st.error("학번과 이름을 반드시 입력해 주세요.")
+    elif any(not ans.strip() for ans in answers.values()):
+        st.error("모든 문제에 대해 답안을 작성해 주세요.")
     else:
-        if any(not ans.strip() for ans in answers.values()):
-            st.error("모든 문제에 대해 답안을 작성해 주세요.")
-        else:
-            combined_prompt = "아래는 각 문제와 모범답안, 학생의 답안입니다:\n\n"
-            for idx, q in enumerate(selected_questions):
-                combined_prompt += f"문제 {idx+1}:\n"
-                combined_prompt += "문제:\n" + q["문제"] + "\n"
-                combined_prompt += "모범답안:\n" + q["모범답안"] + "\n"
-                combined_prompt += "학생의 답안:\n" + answers[idx] + "\n"
-                combined_prompt += "---------------------\n"
-            
-            criteria_text = "채점 기준은 다음과 같습니다:\n"
-            for crit in criteria_data:
-                criteria_text += f"최소비율 {crit['최소비율']}%: {crit['설명']} (점수: {crit['점수']})\n"
-            combined_prompt += "\n" + criteria_text
-            
-            expected_json = (
-                "\n위 정보를 바탕으로, 각 문제 별 학생 답안과 모범답안의 유사도를 0부터 100 사이의 백분율로 산출하고, "
-                "해당 기준에 따라 점수를 부여하십시오. 최종 결과는 아래 JSON 형식으로 출력해 주세요:\n"
-                '{ "문제1": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"문제2": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"문제3": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"문제4": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"문제5": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"문제6": {"score": 0, "유사도": 0.0, "설명": ""}, '
-                '"총점": 0 }'
-            )
-            combined_prompt += expected_json
+        combined_prompt = "아래는 각 문제와 모범답안, 학생의 답안입니다:\n\n"
+        for idx, q in enumerate(selected_questions):
+            combined_prompt += f"문제 {idx+1}:\n"
+            combined_prompt += "문제:\n" + q["문제"] + "\n"
+            combined_prompt += "모범답안:\n" + q["모범답안"] + "\n"
+            combined_prompt += "학생의 답안:\n" + answers[idx] + "\n"
+            combined_prompt += "---------------------\n"
+        
+        criteria_text = "채점 기준은 다음과 같습니다:\n"
+        for crit in criteria_data:
+            criteria_text += f"최소비율 {crit['최소비율']}%: {crit['설명']} (점수: {crit['점수']})\n"
+        combined_prompt += "\n" + criteria_text
+        
+        expected_json = (
+            "\n위 정보를 바탕으로, 각 문제 별 학생 답안과 모범답안의 유사도를 0부터 100 사이의 백분율로 산출하고, "
+            "해당 기준에 따라 점수를 부여하십시오. 최종 결과는 아래 JSON 형식으로 출력해 주세요:\n"
+            '{ "문제1": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"문제2": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"문제3": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"문제4": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"문제5": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"문제6": {"score": 0, "유사도": 0.0, "설명": ""}, '
+            '"총점": 0 }'
+        )
+        combined_prompt += expected_json
 
-            with st.spinner("채점 중입니다... 잠시 기다려 주세요!"):
-                result = grade_all_answers_with_gemini(combined_prompt)
-            
-            if result:
-                try:
-                    score_blocks = ""
-                    total_score = result.get("총점", 0)
+        with st.spinner("채점 중입니다... 잠시 기다려 주세요!"):
+            result = grade_all_answers_with_gemini(combined_prompt)
+        
+        if result:
+            try:
+                score_blocks = ""
+                total_score = result.get("총점", 0)
+                for i in range(6):
+                    q_result = result.get(f"문제{i+1}", {})
+                    score = q_result.get("score", 0)
+                    similarity = q_result.get("유사도", 0.0)
+                    explanation = q_result.get("설명", "")
+                    score_blocks += f'<p class="criterion-item"><strong>문제 {i+1}</strong>: {score}점, 유사도: {similarity:.2f}%, {explanation}</p>'
+                
+                result_card = f"""
+                <div class="score-card">
+                    <h2>{student_name} ({student_id})님의 채점 결과</h2>
+                    <h3>총점: {total_score}점</h3>
+                    <hr>
+                    {score_blocks}
+                </div>
+                """
+                st.markdown(result_card, unsafe_allow_html=True)
+                
+                # 결과 기록 (결과 기록용 시트가 설정된 경우)
+                if results_sheet_id:
+                    submission_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    row = [student_id, student_name, submission_time, total_score]
                     for i in range(6):
+                        q = selected_questions[i]
                         q_result = result.get(f"문제{i+1}", {})
                         score = q_result.get("score", 0)
-                        similarity = q_result.get("유사도", 0.0)
-                        explanation = q_result.get("설명", "")
-                        score_blocks += f'<p class="criterion-item"><strong>문제 {i+1}</strong>: {score}점, 유사도: {similarity:.2f}%, {explanation}</p>'
+                        remark = q_result.get("설명", "")
+                        row.extend([q["문제"], answers.get(i, ""), score, remark])
                     
-                    result_card = f"""
-                    <div class="score-card">
-                        <h2>{student_name} ({student_id})님의 채점 결과</h2>
-                        <h3>총점: {total_score}점</h3>
-                        <hr>
-                        {score_blocks}
-                    </div>
-                    """
-                    st.markdown(result_card, unsafe_allow_html=True)
-                    
-                    # 결과 기록 (기록용 시트가 설정된 경우)
-                    if results_sheet_id:
-                        submission_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        row = [student_id, student_name, submission_time, total_score]
-                        for i in range(6):
-                            q = selected_questions[i]
-                            q_result = result.get(f"문제{i+1}", {})
-                            score = q_result.get("score", 0)
-                            remark = q_result.get("설명", "")
-                            row.extend([q["문제"], answers.get(i, ""), score, remark])
-                        
-                        results_sh = gc.open_by_key(results_sheet_id)
-                        results_ws = results_sh.get_worksheet(0)
-                        results_ws.append_row(row)
-                    else:
-                        st.warning("결과 기록용 스프레드시트 ID(results_sheet_id)가 설정되어 있지 않습니다.")
-                        
-                    # 제출 완료 후 수정 및 재제출 불가하도록 설정
-                    st.session_state.submitted = True
-                except Exception as e:
-                    st.error("채점 결과 처리 중 오류 발생: " + str(e))
+                    results_sh = gc.open_by_key(results_sheet_id)
+                    results_ws = results_sh.get_worksheet(0)
+                    results_ws.append_row(row)
+                else:
+                    st.warning("결과 기록용 스프레드시트 ID(results_sheet_id)가 설정되어 있지 않습니다.")
+                
+                # 제출 완료 후 재제출/수정 불가로 설정
+                st.session_state.submitted = True
+            except Exception as e:
+                st.error("채점 결과 처리 중 오류 발생: " + str(e))
