@@ -9,7 +9,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --------------------------------------------------------------
-# 커스텀 CSS 및 자바스크립트 (Ctrl+V 막기)
+# 커스텀 CSS 및 자바스크립트 (Ctrl+V 완전 차단)
 # --------------------------------------------------------------
 st.markdown(
     """
@@ -19,7 +19,7 @@ st.markdown(
     }
     .title {
         font-family: 'Helvetica', sans-serif;
-        font-size: 2.8em; 
+        font-size: 2.8em;
         color: #3366cc;
         text-align: center;
         margin-bottom: 20px;
@@ -48,10 +48,19 @@ st.markdown(
     }
     </style>
     <script>
-      // Ctrl+V global 차단 (붙여넣기 금지)
+      // Ctrl+V 단축키 차단
       document.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
               e.preventDefault();
+          }
+      });
+      // 모든 textarea 요소에서 붙여넣기 이벤트를 차단
+      window.addEventListener('load', function(){
+          var textareas = document.getElementsByTagName('textarea');
+          for(var i=0; i<textareas.length; i++){
+              textareas[i].addEventListener("paste", function(e) {
+                  e.preventDefault();
+              });
           }
       });
     </script>
@@ -62,9 +71,9 @@ st.markdown(
 # --------------------------------------------------------------
 # 구글 시트 인증 및 데이터 로드
 # --------------------------------------------------------------
-# API 접근 범위 설정
+# API 접근 범위 (읽기/쓰기 모두 가능)
 scope = [
-    "https://www.googleapis.com/auth/spreadsheets",  # 읽기/쓰기 모두 가능
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
@@ -84,19 +93,19 @@ if not questions_sheet_id or not criteria_sheet_id:
     st.error("문제 또는 채점 기준 스프레드시트 ID가 설정되지 않았습니다.")
     st.stop()
 
-# 문제 시트: 각 행은 {"문제": ..., "모범답안": ...} 형태이어야 함
+# 문제 시트 (각 행: {"문제": ..., "모범답안": ...})
 questions_sh = gc.open_by_key(questions_sheet_id)
 questions_ws = questions_sh.get_worksheet(0)
 questions_data = questions_ws.get_all_records()
 
-# 채점 기준 시트: 각 행은 {"최소비율": 80, "점수": 5, "설명": "80% 이상이면 5점 채점"} 형태이어야 함
+# 채점 기준 시트 (각 행: {"최소비율": 80, "점수": 5, "설명": ...})
 criteria_sh = gc.open_by_key(criteria_sheet_id)
 criteria_ws = criteria_sh.get_worksheet(0)
 criteria_data = criteria_ws.get_all_records()
 criteria_data.sort(key=lambda x: float(x["최소비율"]), reverse=True)
 
 # --------------------------------------------------------------
-# 문제 목록 표시 (랜덤으로 6문항 선택, 중복 없음; 세션 상태 사용)
+# 문제 목록 표시 (랜덤으로 6문항 선택; 세션 상태 사용하여 한 번 선택 후 고정)
 # --------------------------------------------------------------
 if len(questions_data) < 6:
     st.error("문제 데이터가 6문항 미만입니다.")
@@ -107,26 +116,34 @@ if "selected_questions" not in st.session_state:
 selected_questions = st.session_state.selected_questions
 
 # --------------------------------------------------------------
-# 앱 UI 구성: 제목, 학생 정보 입력
+# 제출 상태 초기화 (최초 실행 시)
+# --------------------------------------------------------------
+if "submitted" not in st.session_state:
+    st.session_state.submitted = False
+
+# --------------------------------------------------------------
+# 앱 UI 구성: 제목, 학생 정보 입력 (제출 완료 시 비활성화)
 # --------------------------------------------------------------
 st.markdown('<div class="title">논술형 문제 채점 시스템</div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown('<div class="header">학생 정보</div>', unsafe_allow_html=True)
-    student_id = st.text_input("학번", key="student_id")
-    student_name = st.text_input("이름", key="student_name")
+    submitted_flag = st.session_state.get("submitted", False)
+    student_id = st.text_input("학번", key="student_id", disabled=submitted_flag)
+    student_name = st.text_input("이름", key="student_name", disabled=submitted_flag)
 
-submit_disabled = not (student_id.strip() and student_name.strip())
+# 제출 버튼은 학번과 이름이 없거나 이미 제출된 경우 비활성화
+submit_disabled = st.session_state.submitted or not (student_id.strip() and student_name.strip())
 
 # --------------------------------------------------------------
-# 각 질문별 문제 및 답안 입력 영역 생성 (Ctrl+V 차단 효과 적용됨)
+# 각 질문별 문제 및 답안 입력 영역 생성 (제출 완료 시 비활성화)
 # --------------------------------------------------------------
 st.markdown('<div class="header">문제 및 답안</div>', unsafe_allow_html=True)
 answers = {}
 for idx, q in enumerate(selected_questions):
     st.markdown(f'<div class="subheader">문제 {idx+1}</div>', unsafe_allow_html=True)
     st.info(q["문제"], icon="✍️")
-    ans = st.text_area(f"문제 {idx+1} 답안 작성:", key=f"answer_{idx}")
+    ans = st.text_area(f"문제 {idx+1} 답안 작성:", key=f"answer_{idx}", disabled=submitted_flag)
     answers[idx] = ans
 
 # --------------------------------------------------------------
@@ -170,7 +187,7 @@ def grade_all_answers_with_gemini(combined_prompt):
     return result
 
 # --------------------------------------------------------------
-# 제출 버튼 및 채점 처리, 그리고 결과 기록 (결과 기록은 쓰기 권한 있는 시트에 기록)
+# 제출 버튼 및 채점 처리, 그리고 결과 기록 (쓰기를 위한 결과 시트)
 # --------------------------------------------------------------
 if st.button("제출", disabled=submit_disabled):
     if not (student_id.strip() and student_name.strip()):
@@ -229,9 +246,8 @@ if st.button("제출", disabled=submit_disabled):
                     """
                     st.markdown(result_card, unsafe_allow_html=True)
                     
-                    # 결과 기록: 구글 시트 쓰기 가능 시트에 기록 (results_sheet_id가 설정되어 있어야 함)
+                    # 결과 기록 (기록용 시트가 설정된 경우)
                     if results_sheet_id:
-                        # 결과 행 구성 : 학번, 이름, 제출 시각, 총점, 그리고 각 문제별로 [문제, 학생 답안, 점수, 설명]
                         submission_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         row = [student_id, student_name, submission_time, total_score]
                         for i in range(6):
@@ -239,15 +255,15 @@ if st.button("제출", disabled=submit_disabled):
                             q_result = result.get(f"문제{i+1}", {})
                             score = q_result.get("score", 0)
                             remark = q_result.get("설명", "")
-                            # row: 문제 내용, 학생 답안, 점수, 설명
                             row.extend([q["문제"], answers.get(i, ""), score, remark])
                         
-                        # 결과 기록용 시트를 오픈하여 행 추가
                         results_sh = gc.open_by_key(results_sheet_id)
                         results_ws = results_sh.get_worksheet(0)
                         results_ws.append_row(row)
                     else:
                         st.warning("결과 기록용 스프레드시트 ID(results_sheet_id)가 설정되어 있지 않습니다.")
                         
+                    # 제출 완료 후 수정 및 재제출 불가하도록 설정
+                    st.session_state.submitted = True
                 except Exception as e:
                     st.error("채점 결과 처리 중 오류 발생: " + str(e))
