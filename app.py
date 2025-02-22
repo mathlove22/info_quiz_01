@@ -59,27 +59,27 @@ scope = [
     "https://www.googleapis.com/auth/drive.readonly"
 ]
 
-# 서비스 계정 정보는 secrets 파일의 [gcp_service_account] 섹션에 입력되어 있어야 합니다.
+# 서비스 계정 정보는 secrets 파일의 [gcp_service_account] 섹션에 입력되어 있음
 credentials = ServiceAccountCredentials.from_json_keyfile_dict(
     st.secrets["gcp_service_account"], scope
 )
 gc = gspread.authorize(credentials)
 
-# 구글 스프레드시트 ID는 Cloud UI에 최상위 키로 입력된 경우입니다.
-# 만약 .streamlit/secrets.toml 파일의 [general] 섹션에 있다면 st.secrets["general"]["questions_sheet_id"]로 변경하세요.
-questions_sheet_id = st.secrets.get("general", {}).get("questions_sheet_id")
-criteria_sheet_id = st.secrets.get("general", {}).get("criteria_sheet_id")
+# [general] 섹션 내부의 스프레드시트 ID 접근
+general_secrets = st.secrets.get("general", {})
+questions_sheet_id = general_secrets.get("questions_sheet_id")
+criteria_sheet_id = general_secrets.get("criteria_sheet_id")
 
 if not questions_sheet_id or not criteria_sheet_id:
     st.error("스프레드시트 ID가 설정되지 않았습니다.")
     st.stop()
 
-# 문제 시트: 각 행은 {"문제": ..., "모범답안": ...} 형식이어야 합니다.
+# 문제 시트: 각 행은 {"문제": ..., "모범답안": ...} 형식이어야 함.
 questions_sh = gc.open_by_key(questions_sheet_id)
 questions_ws = questions_sh.get_worksheet(0)
 questions_data = questions_ws.get_all_records()
 
-# 채점 기준 시트: 각 행은 {"최소비율": 80, "점수": 5, "설명": "80% 이상이면 5점 채점"} 형식이어야 합니다.
+# 채점 기준 시트: 각 행은 {"최소비율": 80, "점수": 5, "설명": "80% 이상이면 5점 채점"} 형식이어야 함.
 criteria_sh = gc.open_by_key(criteria_sheet_id)
 criteria_ws = criteria_sh.get_worksheet(0)
 criteria_data = criteria_ws.get_all_records()
@@ -88,13 +88,12 @@ criteria_data = criteria_ws.get_all_records()
 criteria_data.sort(key=lambda x: float(x["최소비율"]), reverse=True)
 
 # --------------------------------------------------------------
-# 문제 목록 표시 (6문항 전부)
+# 문제 목록 표시 (랜덤으로 6문항 선택, 중복 없음)
 # --------------------------------------------------------------
 if len(questions_data) < 6:
     st.error("문제 데이터가 6문항 미만입니다.")
     st.stop()
-# 첫 6개 문제를 사용 (원하시면 다른 기준으로 선택 가능)
-selected_questions = questions_data[:6]
+selected_questions = random.sample(questions_data, 6)
 
 # --------------------------------------------------------------
 # 앱 UI 구성: 제목, 학생 정보 입력
@@ -124,8 +123,8 @@ for idx, q in enumerate(selected_questions):
 # Gemini 2.0 LLM을 이용한 전체 채점 함수 (모든 문제를 한 번에 평가)
 # --------------------------------------------------------------
 def grade_all_answers_with_gemini(combined_prompt):
-    # GEMINI_API_KEY를 st.secrets에서 읽습니다. (Cloud UI에 최상위 키로 GEMINI_API_KEY 값을 입력)
-    api_key = st.secrets.get("GEMINI_API_KEY")
+    # GEMINI_API_KEY는 [gcp_service_account] 섹션 내부의 값으로 읽어옵니다.
+    api_key = st.secrets["gcp_service_account"].get("GEMINI_API_KEY")
     if not api_key:
         st.error("GEMINI_API_KEY 환경 변수가 설정되어 있지 않습니다.")
         return None
@@ -170,7 +169,7 @@ if st.button("제출", disabled=submit_disabled):
     if not (student_id.strip() and student_name.strip()):
         st.error("학번과 이름을 반드시 입력해 주세요.")
     else:
-        # 모든 답안이 비어있지 않은지 확인 (필수는 아니지만 원하시면 체크 가능)
+        # 모든 답안이 비어있지 않은지 체크
         if any(not ans.strip() for ans in answers.values()):
             st.error("모든 문제에 대해 답안을 작성해 주세요.")
         else:
@@ -208,7 +207,7 @@ if st.button("제출", disabled=submit_disabled):
             
             if result:
                 try:
-                    # 결과 출력 (각 문제 개별 평가 및 총점을 표시)
+                    # 결과 출력 (각 문제 별 평가 및 총점 표시)
                     score_blocks = ""
                     total_score = result.get("총점", 0)
                     for i in range(6):
