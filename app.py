@@ -72,7 +72,6 @@ st.markdown(
 # --------------------------------------------------------------
 # 구글 시트 인증 및 데이터 로드
 # --------------------------------------------------------------
-# API 접근 범위 (읽기/쓰기 모두 가능)
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -93,7 +92,6 @@ if not questions_sheet_id or not criteria_sheet_id:
     st.error("문제 또는 채점 기준 스프레드시트 ID가 설정되지 않았습니다.")
     st.stop()
 
-# 문제 및 채점 기준 데이터는 한 번만 불러오기
 if "questions_data" not in st.session_state:
     questions_sh = gc.open_by_key(questions_sheet_id)
     questions_ws = questions_sh.get_worksheet(0)
@@ -110,7 +108,7 @@ questions_data = st.session_state.questions_data
 criteria_data = st.session_state.criteria_data
 
 # --------------------------------------------------------------
-# 문제 목록 표시 (랜덤 6문항 추출)
+# 문제 목록 표시 (랜덤으로 6문항 선택)
 # --------------------------------------------------------------
 if len(questions_data) < 6:
     st.error("문제 데이터가 6문항 미만입니다.")
@@ -121,21 +119,25 @@ if "selected_questions" not in st.session_state:
 selected_questions = st.session_state.selected_questions
 
 # --------------------------------------------------------------
-# 제출 상태 초기화 (최초 실행 시)
+# 제출 상태 초기화
 # --------------------------------------------------------------
 if "submitted" not in st.session_state:
     st.session_state.submitted = False
 
 # --------------------------------------------------------------
-# 입력 속도 측정용 세션 상태
+# 입력속도 측정 세션 변수
 # --------------------------------------------------------------
 if "last_time" not in st.session_state:
     st.session_state.last_time = time.time()
 if "last_length" not in st.session_state:
     st.session_state.last_length = 0
 
+# "peak_speed"를 저장해 두어, 한 번이라도 300 넘으면 의심 처리
+if "peak_speed" not in st.session_state:
+    st.session_state.peak_speed = 0.0
+
 # --------------------------------------------------------------
-# 앱 UI 구성: 제목, 학생 정보 (제출 후 수정 불가)
+# 앱 UI: 제목, 학생 정보
 # --------------------------------------------------------------
 st.markdown('<div class="title">논술형 문제 채점 시스템</div>', unsafe_allow_html=True)
 
@@ -145,11 +147,10 @@ with st.sidebar:
     student_id = st.text_input("학번", key="student_id", disabled=submitted_flag)
     student_name = st.text_input("이름", key="student_name", disabled=submitted_flag)
 
-# 제출 버튼은 학번/이름이 없거나 이미 제출된 경우 비활성화
 submit_disabled = st.session_state.submitted or not (student_id.strip() and student_name.strip())
 
 # --------------------------------------------------------------
-# 문제 및 답안 입력 (제출 후 수정 불가)
+# 문제 및 답안 (제출 후 수정 불가)
 # --------------------------------------------------------------
 st.markdown('<div class="header">문제 및 답안</div>', unsafe_allow_html=True)
 
@@ -166,7 +167,6 @@ for idx, q in enumerate(selected_questions):
 
 # --------------------------------------------------------------
 # 입력 속도 계산
-#   - 모든 답안의 길이 합을 구해, 이전 길이와 비교
 # --------------------------------------------------------------
 current_time = time.time()
 total_answer_length = sum(len(a) for a in answers.values())
@@ -175,18 +175,23 @@ char_diff = total_answer_length - st.session_state.last_length
 
 typing_speed = char_diff / time_diff if time_diff else 0
 
-# 임계값 초과 시 경고
-if typing_speed > 300:
-    st.warning("입력 속도가 매우 빠릅니다. 붙여넣기 사용이 의심됩니다.")
+# 스코어 반영: 한번이라도 300 넘으면 peak_speed에 반영
+if typing_speed > st.session_state.peak_speed:
+    st.session_state.peak_speed = typing_speed
 
+# 현재 입력 속도 확인
 st.markdown(f"**현재 추정 입력 속도**: {typing_speed:.2f} chars/sec")
+
+# 300 초과 시 즉시 경고
+if typing_speed > 300:
+    st.warning("붙여넣기를 의심할 만한 빠른 입력 속도가 감지되었습니다!")
 
 # 세션 상태 갱신
 st.session_state.last_time = current_time
 st.session_state.last_length = total_answer_length
 
 # --------------------------------------------------------------
-# Gemini 2.0 LLM을 이용한 채점 함수
+# Gemini 2.0 평가 함수
 # --------------------------------------------------------------
 def grade_all_answers_with_gemini(combined_prompt):
     api_key = st.secrets["gcp_service_account"].get("GEMINI_API_KEY")
@@ -224,7 +229,7 @@ def grade_all_answers_with_gemini(combined_prompt):
     return result
 
 # --------------------------------------------------------------
-# 제출 버튼 처리
+# 제출 버튼 (채점 & 기록)
 # --------------------------------------------------------------
 if st.button("제출", disabled=submit_disabled):
     if not (student_id.strip() and student_name.strip()):
@@ -232,7 +237,7 @@ if st.button("제출", disabled=submit_disabled):
     elif any(not ans.strip() for ans in answers.values()):
         st.error("모든 문제에 대해 답안을 작성해 주세요.")
     else:
-        # 학생 답안과 모범답안을 합쳐 프롬프트 작성
+        # 논술형 채점용 프롬프트 생성
         combined_prompt = "아래는 각 문제와 모범답안, 학생의 답안입니다:\n\n"
         for idx, q in enumerate(selected_questions):
             combined_prompt += f"문제 {idx+1}:\n"
@@ -241,13 +246,13 @@ if st.button("제출", disabled=submit_disabled):
             combined_prompt += "학생의 답안:\n" + answers[idx] + "\n"
             combined_prompt += "---------------------\n"
         
-        # 채점 기준 추가
+        # 채점 기준
         criteria_text = "채점 기준은 다음과 같습니다:\n"
         for crit in criteria_data:
             criteria_text += f"최소비율 {crit['최소비율']}%: {crit['설명']} (점수: {crit['점수']})\n"
         combined_prompt += "\n" + criteria_text
         
-        # 기대하는 JSON 포맷 안내
+        # 기대 JSON 예시
         expected_json = (
             "\n위 정보를 바탕으로, 각 문제 별 학생 답안과 모범답안의 유사도를 0부터 100 사이의 백분율로 산출하고, "
             "해당 기준에 따라 점수를 부여하십시오. 최종 결과는 아래 JSON 형식으로 출력해 주세요:\n"
@@ -261,7 +266,7 @@ if st.button("제출", disabled=submit_disabled):
         )
         combined_prompt += expected_json
 
-        with st.spinner("채점 중입니다... 잠시만 기다려 주세요!"):
+        with st.spinner("채점 중입니다... 잠시 기다려 주세요!"):
             result = grade_all_answers_with_gemini(combined_prompt)
         
         if result:
@@ -289,15 +294,14 @@ if st.button("제출", disabled=submit_disabled):
                 """
                 st.markdown(result_card, unsafe_allow_html=True)
                 
-                # 결과 기록용 시트에 추가 기록
-                if results_sheet_id:
-                    # 붙여넣기 의심 여부
-                    suspicious_flag = "Y" if typing_speed > 300 else "N"
+                # 입력 속도 의심 여부 (한 번이라도 300 넘었으면 Y)
+                suspicious_flag = "Y" if st.session_state.peak_speed > 300 else "N"
 
+                if results_sheet_id:
                     submission_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     row = [student_id, student_name, submission_time, total_score]
                     
-                    # 각 문제별 세부 내용
+                    # 문제별 세부 기록
                     for i in range(6):
                         q = selected_questions[i]
                         q_result = result.get(f"문제{i+1}", {})
@@ -305,16 +309,17 @@ if st.button("제출", disabled=submit_disabled):
                         remark = q_result.get("설명", "")
                         row.extend([q["문제"], answers.get(i, ""), score, remark])
                     
-                    # 입력 속도 & 의심 여부
-                    row.extend([f"{typing_speed:.2f}", suspicious_flag])
-                    
+                    # 현재까지의 최고 입력 속도 & 붙여넣기 의심 여부
+                    row.extend([f"{st.session_state.peak_speed:.2f}", suspicious_flag])
+
+                    # 구글 시트 append
                     results_sh = gc.open_by_key(results_sheet_id)
                     results_ws = results_sh.get_worksheet(0)
                     results_ws.append_row(row)
                 else:
                     st.warning("결과 기록용 스프레드시트 ID(results_sheet_id)가 설정되어 있지 않습니다.")
                 
-                # 제출 끝 -> 재제출/수정 불가
+                # 제출 완료 후 재제출 불가
                 st.session_state.submitted = True
 
             except Exception as e:
