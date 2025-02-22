@@ -182,14 +182,14 @@ def grade_all_answers_with_gemini(combined_prompt):
     genai.configure(api_key=api_key)
     
     generation_config = {
-        "temperature": 1,
-        "top_p": 0.95,
-        "top_k": 40,
+        "temperature": 0,
+        "top_p": 1,
+        "top_k": 5,
         "max_output_tokens": 8192,
         "response_mime_type": "text/plain",
     }
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash-exp",
+        model_name="gemini-2.0-flash",
         generation_config=generation_config,
     )
     chat_session = model.start_chat(history=[])
