@@ -66,8 +66,8 @@ credentials = ServiceAccountCredentials.from_json_keyfile_dict(
 gc = gspread.authorize(credentials)
 
 # st.secrets에 설정한 구글 시트 ID들 (문제와 채점 기준)
-questions_sheet_id = st.secrets["general"]["questions_sheet_id"]   
-criteria_sheet_id = st.secrets["general"]["criteria_sheet_id"]
+questions_sheet_id = st.secrets["questions_sheet_id"]
+criteria_sheet_id = st.secrets["criteria_sheet_id"]
 
 # 문제 시트: 각 행은 {"문제": ..., "모범답안": ...} 형식이어야 함.
 questions_sh = gc.open_by_key(questions_sheet_id)
