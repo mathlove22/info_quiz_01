@@ -67,8 +67,8 @@ gc = gspread.authorize(credentials)
 
 # 구글 스프레드시트 ID는 Cloud UI에 최상위 키로 입력된 경우입니다.
 # 만약 .streamlit/secrets.toml 파일의 [general] 섹션에 있다면 st.secrets["general"]["questions_sheet_id"]로 변경하세요.
-questions_sheet_id = st.secrets.get("questions_sheet_id")
-criteria_sheet_id = st.secrets.get("criteria_sheet_id")
+questions_sheet_id = st.secrets.get("general", {}).get("questions_sheet_id")
+criteria_sheet_id = st.secrets.get("general", {}).get("criteria_sheet_id")
 
 if not questions_sheet_id or not criteria_sheet_id:
     st.error("스프레드시트 ID가 설정되지 않았습니다.")
