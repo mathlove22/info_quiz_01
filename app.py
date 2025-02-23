@@ -265,11 +265,19 @@ if st.button("제출", disabled=submit_disabled):
                     score = q_result.get("score", 0)
                     similarity = q_result.get("유사도", 0.0)
                     explanation = q_result.get("설명", "")
+                    
+                    # 설명을 더 명확히 하기 위한 수정
+                    detailed_explanation = f"<strong>채점 기준 설명:</strong> {explanation}"
+                    criteria_met = f"<strong>유사도:</strong> {similarity:.2f}%"
+                    score_info = f"<strong>점수:</strong> {score}점"
+                    
+                    # 각 문제에 대한 결과 구성
                     score_blocks += (
                         f'<p class="criterion-item"><strong>문제 {i+1}</strong>: '
-                        f'{score}점, 유사도: {similarity:.2f}%, {explanation}</p>'
+                        f'{score_info}, {criteria_met}<br>{detailed_explanation}</p>'
                     )
                 
+                                
                 result_card = f"""
                 <div class="score-card">
                     <h2>{student_name} ({student_id})님의 채점 결과</h2>
